@@ -45,15 +45,38 @@ if(NOT gen_rc EQUAL 0)
     return()
 endif()
 
-# Compare the regenerated dictionaries against the committed ones, byte-for-byte.
+# Compare the regenerated dictionaries against the committed ones by their
+# DECOMPRESSED payload, not the compressed bytes: zstd's container framing is not
+# guaranteed to be byte-identical across libzstd versions, but the dictionary data
+# we actually embed must be. (`generate_hmm_model.py` output, being plain text, is
+# compared as-is below if present.)
+find_program(ZSTD_CLI NAMES zstd)
+
 foreach(name dict_le.dat.zst dict_be.dat.zst)
-    file(SHA256 "${tmp}/data/${name}" regenerated_sha)
-    file(SHA256 "${REPO}/data/${name}" committed_sha)
+    if(ZSTD_CLI)
+        execute_process(COMMAND ${ZSTD_CLI} -dc "${tmp}/data/${name}"
+                        OUTPUT_FILE "${tmp}/regenerated_${name}.raw" RESULT_VARIABLE r1)
+        execute_process(COMMAND ${ZSTD_CLI} -dc "${REPO}/data/${name}"
+                        OUTPUT_FILE "${tmp}/committed_${name}.raw" RESULT_VARIABLE r2)
+        if(NOT r1 EQUAL 0 OR NOT r2 EQUAL 0)
+            message(FATAL_ERROR "test_reproducible: failed to decompress ${name}")
+        endif()
+        file(SHA256 "${tmp}/regenerated_${name}.raw" regenerated_sha)
+        file(SHA256 "${tmp}/committed_${name}.raw" committed_sha)
+        set(what "decompressed payload")
+    else()
+        # No zstd CLI: fall back to comparing the compressed bytes (may be a false
+        # negative across libzstd versions, but better than no check).
+        file(SHA256 "${tmp}/data/${name}" regenerated_sha)
+        file(SHA256 "${REPO}/data/${name}" committed_sha)
+        set(what "compressed bytes (no zstd CLI to compare payloads)")
+    endif()
+
     if(NOT regenerated_sha STREQUAL committed_sha)
         message(FATAL_ERROR
-            "test_reproducible: regenerated ${name} does not match the committed file\n"
+            "test_reproducible: regenerated ${name} does not match the committed file (${what})\n"
             "  committed:    ${committed_sha}\n"
             "  regenerated:  ${regenerated_sha}")
     endif()
-    message(STATUS "test_reproducible: ${name} reproduced byte-for-byte (${committed_sha})")
+    message(STATUS "test_reproducible: ${name} reproduced (${what}, ${committed_sha})")
 endforeach()
