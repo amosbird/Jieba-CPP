@@ -16,7 +16,7 @@ jiebacpp_add_test(test_encoding)
 # Endianness mirror check: validates that dict_be.dat.zst is the exact element-wise
 # byte-swap of dict_le.dat.zst. Needs zstd and the data directory; runs on any host.
 add_executable(test_endianness test_endianness.cpp)
-target_link_libraries(test_endianness PRIVATE jiebacpp_test_main zstd::libzstd)
+target_link_libraries(test_endianness PRIVATE jiebacpp_test_main jiebacpp_zstd)
 add_test(NAME test_endianness
          COMMAND test_endianness ${CMAKE_SOURCE_DIR}/data)
 

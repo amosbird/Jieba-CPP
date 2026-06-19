@@ -36,17 +36,27 @@ include(FetchContent)
 # Prefer system packages; fall back to fetching pinned sources so a clean
 # checkout builds with no manual setup.
 
+# zstd ships its CMake config under several target spellings depending on the
+# platform (`zstd::libzstd`, `zstd::libzstd_shared`, `zstd::libzstd_static`),
+# and on many distros there is no CMake config at all (only the library). Probe
+# config first, otherwise fall back to plain library discovery, and normalize
+# everything to a single `JiebaCPP::zstd` target the library links against.
+add_library(jiebacpp_zstd INTERFACE)
 find_package(zstd QUIET)
-if(NOT zstd_FOUND)
+if(TARGET zstd::libzstd)
+    target_link_libraries(jiebacpp_zstd INTERFACE zstd::libzstd)
+elseif(TARGET zstd::libzstd_shared)
+    target_link_libraries(jiebacpp_zstd INTERFACE zstd::libzstd_shared)
+elseif(TARGET zstd::libzstd_static)
+    target_link_libraries(jiebacpp_zstd INTERFACE zstd::libzstd_static)
+else()
     find_library(ZSTD_LIBRARY NAMES zstd)
     find_path(ZSTD_INCLUDE_DIR NAMES zstd.h)
     if(NOT ZSTD_LIBRARY OR NOT ZSTD_INCLUDE_DIR)
         message(FATAL_ERROR "libzstd not found. Install zstd development files (e.g. libzstd-dev).")
     endif()
-    add_library(zstd_shim INTERFACE)
-    target_include_directories(zstd_shim INTERFACE ${ZSTD_INCLUDE_DIR})
-    target_link_libraries(zstd_shim INTERFACE ${ZSTD_LIBRARY})
-    add_library(zstd::libzstd ALIAS zstd_shim)
+    target_include_directories(jiebacpp_zstd INTERFACE ${ZSTD_INCLUDE_DIR})
+    target_link_libraries(jiebacpp_zstd INTERFACE ${ZSTD_LIBRARY})
 endif()
 
 if(JIEBACPP_FETCH_ABSEIL)
@@ -95,7 +105,7 @@ target_compile_options(jieba PRIVATE "--embed-dir=${CMAKE_CURRENT_SOURCE_DIR}/da
 
 target_link_libraries(jieba
     PUBLIC  absl::flat_hash_set
-    PRIVATE zstd::libzstd)
+    PRIVATE jiebacpp_zstd)
 # `jieba.h` -> `jieba_dict.h` includes <darts.h>, so darts-clone is a public
 # (transitive) include dependency for consumers of the library.
 target_include_directories(jieba SYSTEM PUBLIC ${darts_clone_SOURCE_DIR}/include)
