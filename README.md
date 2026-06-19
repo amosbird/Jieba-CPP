@@ -95,7 +95,7 @@ sources and headers here are kept byte-identical to that copy. The standalone
 
 ```bash
 pip install numpy zstandard dartsclone
-python3 tools/generate_dict.py        # writes data/dict_le.dat.zst
+python3 tools/generate_dict.py        # writes data/dict_le.dat.zst + data/dict_be.dat.zst
 python3 tools/generate_hmm_model.py   # writes data/jieba_hmm_model.dat
 ```
 
@@ -105,12 +105,19 @@ access).
 
 ## On-disk format
 
-The dictionary is a little-endian image of a [darts-clone](https://github.com/s-yata/darts-clone)
+The dictionary is an image of a [darts-clone](https://github.com/s-yata/darts-clone)
 double-array trie plus a parallel array of `double` weights, zstd-compressed.
 Trie keys encode each BMP code point as 3 bytes (`0x80..0xFF` only, so no `0x00`
 bytes, injective and lexicographically order-preserving). The HMM model is a
-generated C++ source `#include`d directly. The format is little-endian only;
-big-endian platforms (e.g. s390x) are not supported.
+generated C++ source `#include`d directly (endianness-independent).
+
+Two mirror dictionary files are shipped, `data/dict_le.dat.zst` (little-endian)
+and `data/dict_be.dat.zst` (big-endian); they hold identical element values in
+opposite byte order. The library `#embed`s whichever matches the host's
+`__BYTE_ORDER__`, so the trie/weights are loaded natively on both little- and
+big-endian platforms with no byte-swapping at load time. The `test_endianness`
+test asserts the two files are exact element-wise byte-swap mirrors, which lets
+the big-endian build be validated on a little-endian host.
 
 ## Layout
 

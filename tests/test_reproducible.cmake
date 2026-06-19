@@ -26,11 +26,15 @@ file(REMOVE_RECURSE "${tmp}")
 file(MAKE_DIRECTORY "${tmp}")
 
 # The generator writes its outputs next to itself, so run a copy from the temp dir.
-configure_file("${REPO}/tools/generate_dict.py" "${tmp}/generate_dict.py" COPYONLY)
+# Mirror the repo's tools/ + data/ layout so the generator writes to data/ as it
+# does in the repo (it resolves its output dir as ../data relative to itself).
+file(MAKE_DIRECTORY "${tmp}/tools")
+file(MAKE_DIRECTORY "${tmp}/data")
+configure_file("${REPO}/tools/generate_dict.py" "${tmp}/tools/generate_dict.py" COPYONLY)
 
 execute_process(
-    COMMAND ${PYTHON} "${tmp}/generate_dict.py"
-    WORKING_DIRECTORY "${tmp}"
+    COMMAND ${PYTHON} "${tmp}/tools/generate_dict.py"
+    WORKING_DIRECTORY "${tmp}/tools"
     RESULT_VARIABLE gen_rc
     OUTPUT_VARIABLE gen_out
     ERROR_VARIABLE gen_err)
@@ -41,15 +45,15 @@ if(NOT gen_rc EQUAL 0)
     return()
 endif()
 
-# Compare the regenerated dictionary against the committed one, byte-for-byte.
-file(SHA256 "${tmp}/dict_le.dat.zst" regenerated_sha)
-file(SHA256 "${REPO}/data/dict_le.dat.zst" committed_sha)
-
-if(NOT regenerated_sha STREQUAL committed_sha)
-    message(FATAL_ERROR
-        "test_reproducible: regenerated dict_le.dat.zst does not match the committed file\n"
-        "  committed:    ${committed_sha}\n"
-        "  regenerated:  ${regenerated_sha}")
-endif()
-
-message(STATUS "test_reproducible: dict_le.dat.zst reproduced byte-for-byte (${committed_sha})")
+# Compare the regenerated dictionaries against the committed ones, byte-for-byte.
+foreach(name dict_le.dat.zst dict_be.dat.zst)
+    file(SHA256 "${tmp}/data/${name}" regenerated_sha)
+    file(SHA256 "${REPO}/data/${name}" committed_sha)
+    if(NOT regenerated_sha STREQUAL committed_sha)
+        message(FATAL_ERROR
+            "test_reproducible: regenerated ${name} does not match the committed file\n"
+            "  committed:    ${committed_sha}\n"
+            "  regenerated:  ${regenerated_sha}")
+    endif()
+    message(STATUS "test_reproducible: ${name} reproduced byte-for-byte (${committed_sha})")
+endforeach()

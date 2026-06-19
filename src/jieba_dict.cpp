@@ -6,25 +6,28 @@
 
 #include <zstd.h>
 
-/// The dictionary file on disk is little-endian (as produced by `generate_dict.py`):
-///   - the `DartsHeader` fields are written as little-endian via Python `struct.pack('<dQQ', ...)`;
-///   - the `double` weights array is `np.float64` little-endian;
-///   - the `darts-clone` trie array is `np.uint32` little-endian.
+/// The dictionary file on disk stores three `reinterpret_cast`-ed regions in the
+/// host's native byte order:
+///   - the `DartsHeader` fields (`min_weight` f64, `num_elems`/`da_size` u64);
+///   - the `double` weights array;
+///   - the `darts-clone` trie array (`uint32` per element).
 ///
-/// We `reinterpret_cast` the decompressed buffer onto those types directly, so the
-/// host must also be little-endian. ClickHouse builds jieba only on little-endian
-/// targets (see the `ENABLE_JIEBA` / `ARCH_S390X` guard in `contrib/CMakeLists.txt`);
-/// this `static_assert` is a belt-and-suspenders check in case someone manually
-/// enables jieba on a big-endian platform.
+/// `generate_dict.py` emits two byte-for-byte mirror files — `dict_le.dat.zst`
+/// (little-endian) and `dict_be.dat.zst` (big-endian) — and we `#embed` whichever
+/// matches the host endianness, so the decompressed buffer is always already in
+/// native order and needs no byte-swapping at load time.
 ///
 /// The trie *key* encoding (`encodeRuneKey` in `jieba_dict.h`) is independent of
 /// host endianness — bytes are emitted in an explicit big-endian order with the
 /// high bit set in every byte.
-static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "Jieba dictionary file is little-endian only");
 
 constexpr unsigned char resource_jieba_dict_zst[] =
 {
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    #embed "dict_be.dat.zst"
+#else
     #embed "dict_le.dat.zst"
+#endif
 };
 
 namespace Jieba

@@ -36,11 +36,14 @@ Processing steps:
 7. Sort the words lexicographically by their encoded byte form.
 8. Build the Double-Array Trie using the encoded keys, their lengths in bytes,
    and integer values (0..n-1).
-9. Write a single little-endian binary file and zstd-compress it. ClickHouse
-   only targets little-endian platforms, so a separate big-endian dictionary
-   is not produced.
+9. Write two zstd-compressed binary files, `dict_le.dat.zst` (little-endian) and
+   `dict_be.dat.zst` (big-endian). They are byte-for-byte mirrors: the big-endian
+   file is the little-endian one with each multi-byte scalar (header fields, the
+   float64 weights, and the uint32 trie elements) byte-swapped. The runtime embeds
+   whichever matches the host's `__BYTE_ORDER__`, so the dictionary works natively
+   on both endiannesses without any byte-swapping at load time.
 
-Binary file layout (uncompressed `dict_le.dat`):
+Binary file layout (uncompressed `dict_<le|be>.dat`):
 
 +--------+----------------+-------------------------------------------+
 | Offset | Size (bytes)   | Description                               |
@@ -51,6 +54,9 @@ Binary file layout (uncompressed `dict_le.dat`):
 | 0x18   | 8 * num_elems  | weights array (float64)                   |
 | ...    | 4 * dat_size   | trie data array (uint32 per element)      |
 +--------+----------------+-------------------------------------------+
+
+All scalars are stored in the file's declared endianness; the two files differ
+only by byte-swapping every scalar element (not by reordering the elements).
 """
 
 import hashlib
@@ -168,19 +174,56 @@ da = DoubleArray()
 da.build(keys_bytes, lengths=lengths, values=values)
 arr = np.frombuffer(da.array(), dtype=np.uint32)
 
-header = struct.pack(
-    "<dQQ",
-    np.min(weights),
-    len(weights),
-    da.size(),
-)
-payload = header + weights.tobytes() + arr.tobytes()
+# Output directory: the embedded data lives in ../data relative to this script
+# (tools/ -> data/). Fall back to the script dir if data/ does not exist.
+DATA_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "data"))
+if not os.path.isdir(DATA_DIR):
+    DATA_DIR = SCRIPT_DIR
 
-with open(os.path.join(SCRIPT_DIR, "dict_le.dat"), "wb") as f:
-    f.write(payload)
 
-# Use the highest zstd level so the compressed dict (~3.5 MiB) stays under the 5 MiB
+def build_payload(endian):
+    """Serialize the dictionary in the given endianness ('<' little, '>' big).
+
+    The two payloads are exact mirrors: identical element values, with every
+    multi-byte scalar (header fields, float64 weights, uint32 trie elements)
+    stored in the requested byte order.
+    """
+    header = struct.pack(
+        endian + "dQQ",
+        np.min(weights),
+        len(weights),
+        da.size(),
+    )
+    weights_bytes = weights.astype(endian + "f8").tobytes()
+    arr_bytes = arr.astype(endian + "u4").tobytes()
+    return header + weights_bytes + arr_bytes
+
+
+payload_le = build_payload("<")
+payload_be = build_payload(">")
+
+# Symmetry self-check: the big-endian payload must be the little-endian one with
+# every scalar byte-swapped element-wise. This is what makes the big-endian file
+# verifiable on a little-endian host: a runtime that byte-swaps dict_be back
+# element-wise must reproduce dict_le exactly. We verify it here at generation
+# time so the invariant can never silently drift.
+assert len(payload_le) == len(payload_be)
+hdr_le = struct.unpack("<dQQ", payload_le[:24])
+hdr_be = struct.unpack(">dQQ", payload_be[:24])
+assert hdr_le == hdr_be, "header fields differ between endiannesses"
+assert np.array_equal(
+    np.frombuffer(payload_le[24:24 + 8 * len(weights)], dtype="<f8"),
+    np.frombuffer(payload_be[24:24 + 8 * len(weights)], dtype=">f8"),
+), "weights differ between endiannesses"
+assert np.array_equal(
+    np.frombuffer(payload_le[24 + 8 * len(weights):], dtype="<u4"),
+    np.frombuffer(payload_be[24 + 8 * len(weights):], dtype=">u4"),
+), "trie array differs between endiannesses"
+
+# Use the highest zstd level so each compressed dict (~3.5 MiB) stays under the 5 MiB
 # in-tree size limit enforced by `ci/jobs/scripts/check_style/various_checks.sh`.
 compressor = zstandard.ZstdCompressor(level=22)
-with open(os.path.join(SCRIPT_DIR, "dict_le.dat.zst"), "wb") as f:
-    f.write(compressor.compress(payload))
+for name, payload in (("dict_le.dat.zst", payload_le), ("dict_be.dat.zst", payload_be)):
+    with open(os.path.join(DATA_DIR, name), "wb") as f:
+        f.write(compressor.compress(payload))
+    print(f"Wrote {os.path.join(DATA_DIR, name)}", file=sys.stderr)
