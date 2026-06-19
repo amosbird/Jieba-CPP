@@ -1,0 +1,10 @@
+build/
+build-*/
+cmake-build-*/
+*.o
+*.a
+*.so
+*.dat
+!data/jieba_hmm_model.dat
+__pycache__/
+*.pyc
