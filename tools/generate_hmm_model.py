@@ -22,6 +22,12 @@ import urllib.request
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Output directory: the embedded data lives in ../data relative to this script
+# (tools/ -> data/). Fall back to the script dir if data/ does not exist.
+DATA_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "data"))
+if not os.path.isdir(DATA_DIR):
+    DATA_DIR = SCRIPT_DIR
+
 # Pin to a specific cppjieba commit so regeneration is reproducible and the
 # downloaded bytes are auditable. The cppjieba repository is archived, so this
 # commit will not change underneath us; the checksum below is the additional
@@ -182,7 +188,7 @@ def main():
     try:
         lines = fetch_verified_lines(HMM_URL, HMM_SHA256)
         start_prob, trans_prob, emit_maps = parse_model(lines)
-        out_path = os.path.join(SCRIPT_DIR, "jieba_hmm_model.dat")
+        out_path = os.path.join(DATA_DIR, "jieba_hmm_model.dat")
         format_cpp(start_prob, trans_prob, emit_maps, out_path)
         print(f"Wrote {out_path}")
     except Exception as e:

@@ -1,10 +1,11 @@
 # Reproducibility check: re-run a generator into a temporary directory and verify it
 # reproduces the committed embedded data byte-for-byte.
 #
-# The generators download their source data from a pinned cppjieba commit and verify it
-# against a hard-coded SHA-256, so this test needs network access plus the Python deps
-# (numpy, zstandard, dartsclone). It skips gracefully (does not fail) when those are
-# unavailable, so it never produces false negatives in an offline build.
+# Both generators (`generate_dict.py` and `generate_hmm_model.py`) download their source
+# data from a pinned cppjieba commit and verify it against a hard-coded SHA-256, so this
+# test needs network access plus the Python deps (numpy, zstandard, dartsclone). It skips
+# gracefully (does not fail) when those are unavailable, so it never produces false
+# negatives in an offline build.
 
 if(NOT PYTHON)
     message(STATUS "test_reproducible: no Python interpreter; skipping")
@@ -25,31 +26,29 @@ set(tmp "${CMAKE_CURRENT_BINARY_DIR}/repro_tmp")
 file(REMOVE_RECURSE "${tmp}")
 file(MAKE_DIRECTORY "${tmp}")
 
-# The generator writes its outputs next to itself, so run a copy from the temp dir.
-# Mirror the repo's tools/ + data/ layout so the generator writes to data/ as it
-# does in the repo (it resolves its output dir as ../data relative to itself).
+# Mirror the repo's tools/ + data/ layout so the generators write to data/ as they do in
+# the repo (each resolves its output dir as ../data relative to itself).
 file(MAKE_DIRECTORY "${tmp}/tools")
 file(MAKE_DIRECTORY "${tmp}/data")
-configure_file("${REPO}/tools/generate_dict.py" "${tmp}/tools/generate_dict.py" COPYONLY)
-
-execute_process(
-    COMMAND ${PYTHON} "${tmp}/tools/generate_dict.py"
-    WORKING_DIRECTORY "${tmp}/tools"
-    RESULT_VARIABLE gen_rc
-    OUTPUT_VARIABLE gen_out
-    ERROR_VARIABLE gen_err)
-
-if(NOT gen_rc EQUAL 0)
-    # Most likely no network. Treat as skip, not failure.
-    message(STATUS "test_reproducible: generator could not run (likely offline); skipping\n${gen_err}")
-    return()
-endif()
+foreach(script generate_dict.py generate_hmm_model.py)
+    configure_file("${REPO}/tools/${script}" "${tmp}/tools/${script}" COPYONLY)
+    execute_process(
+        COMMAND ${PYTHON} "${tmp}/tools/${script}"
+        WORKING_DIRECTORY "${tmp}/tools"
+        RESULT_VARIABLE gen_rc
+        OUTPUT_VARIABLE gen_out
+        ERROR_VARIABLE gen_err)
+    if(NOT gen_rc EQUAL 0)
+        # Most likely no network. Treat as skip, not failure.
+        message(STATUS "test_reproducible: ${script} could not run (likely offline); skipping\n${gen_err}")
+        return()
+    endif()
+endforeach()
 
 # Compare the regenerated dictionaries against the committed ones by their
 # DECOMPRESSED payload, not the compressed bytes: zstd's container framing is not
 # guaranteed to be byte-identical across libzstd versions, but the dictionary data
-# we actually embed must be. (`generate_hmm_model.py` output, being plain text, is
-# compared as-is below if present.)
+# we actually embed must be.
 find_program(ZSTD_CLI NAMES zstd)
 
 foreach(name dict_le.dat.zst dict_be.dat.zst)
@@ -80,3 +79,14 @@ foreach(name dict_le.dat.zst dict_be.dat.zst)
     endif()
     message(STATUS "test_reproducible: ${name} reproduced (${what}, ${committed_sha})")
 endforeach()
+
+# The HMM model is a generated C++ source (plain text), so compare it byte-for-byte.
+file(SHA256 "${tmp}/data/jieba_hmm_model.dat" regenerated_hmm_sha)
+file(SHA256 "${REPO}/data/jieba_hmm_model.dat" committed_hmm_sha)
+if(NOT regenerated_hmm_sha STREQUAL committed_hmm_sha)
+    message(FATAL_ERROR
+        "test_reproducible: regenerated jieba_hmm_model.dat does not match the committed file\n"
+        "  committed:    ${committed_hmm_sha}\n"
+        "  regenerated:  ${regenerated_hmm_sha}")
+endif()
+message(STATUS "test_reproducible: jieba_hmm_model.dat reproduced byte-for-byte (${committed_hmm_sha})")
