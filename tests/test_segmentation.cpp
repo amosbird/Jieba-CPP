@@ -63,8 +63,12 @@ int main()
     // Mixed ASCII + Chinese.
     CHECK_EQ(toStrings(jieba.cut("5G网络")), (std::vector<std::string>{"5G", "网络"}));
 
-    // Full-width Chinese punctuation is a separator.
+    // All Unicode punctuation and separators (General Category P or Z) are dropped.
     CHECK_EQ(toStrings(jieba.cut("你好，世界")), (std::vector<std::string>{"你好", "世界"}));
+    CHECK_EQ(toStrings(jieba.cut("你好（世界）")), (std::vector<std::string>{"你好", "世界"}));
+    CHECK_EQ(toStrings(jieba.cut("北京【大学】")), (std::vector<std::string>{"北京", "大学"}));
+    CHECK_EQ(toStrings(jieba.cut("测试\xe3\x80\x80空格")), (std::vector<std::string>{"测试", "空格"})); // U+3000 ideographic space
+    CHECK_EQ(toStrings(jieba.cut("你好\xe2\x80\x94\xe2\x80\x94世界")), (std::vector<std::string>{"你好", "世界"})); // em-dash U+2014
 
     // Distinct dictionary words keep distinct entries (regression for the old
     // non-injective rune encoding that collapsed e.g. 一 U+4E00 / 仰 U+4EF0).

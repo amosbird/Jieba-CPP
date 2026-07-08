@@ -1,6 +1,6 @@
 #include <jieba.h>
 
-#include <absl/container/flat_hash_set.h>
+#include <jieba_separator_bitmap.h>
 
 namespace Jieba
 {
@@ -139,19 +139,11 @@ std::vector<std::string_view> convertRangesToWords(std::string_view sentence, co
     return words;
 }
 
-/// The runes here are raw Unicode codepoints (see `decodeUTF8Rune` in `jieba_common.h`).
-/// The list intentionally includes only "structural" separators that should never
-/// appear inside a token: ASCII whitespace, ASCII control characters (NUL, etc., which
-/// `FixedString` uses to pad short values), and a few common full-width Chinese
-/// punctuation marks. ASCII punctuation (commas, semicolons, parentheses, ...) is
-/// handled separately by the HMM segmenter, which drops it instead of emitting it
-/// as a standalone token.
-const absl::flat_hash_set<Rune> separators = {
-    /// ASCII whitespace and the most common control characters that appear in real input.
-    0x00, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20,
-    /// Common full-width Chinese punctuation marks.
-    0x3001 /* 、 */, 0x3002 /* 。 */, 0xFF0C /* ， */, 0xFF1F /* ？ */, 0xFF01 /* ！ */,
-    0xFF1A /* ： */, 0xFF1B /* ； */};
+/// Separator predicate: any BMP codepoint whose Unicode General Category is
+/// P (punctuation) or Z (separator/space), plus ASCII control chars (0x00-0x1F).
+/// Implemented as a 8 KB bitmap lookup — branchless, cache-friendly, and covers
+/// all Unicode punctuation without manual enumeration.
+using jieba_separator::isSeparator;
 
 class PreFilter
 {
@@ -168,7 +160,7 @@ public:
     {
         RuneRange range;
         /// Skip leading separators
-        while (cursor < runes.size() && separators.contains(runes.runeAt(cursor)))
+        while (cursor < runes.size() && isSeparator(runes.runeAt(cursor)))
             ++cursor;
 
         if (cursor >= runes.size())
@@ -180,7 +172,7 @@ public:
         range.begin = cursor;
 
         /// Accumulate until the next separator
-        while (cursor < runes.size() && !separators.contains(runes.runeAt(cursor)))
+        while (cursor < runes.size() && !isSeparator(runes.runeAt(cursor)))
             ++cursor;
 
         range.end = cursor;

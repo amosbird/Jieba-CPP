@@ -18,19 +18,14 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 option(JIEBACPP_BUILD_TESTS "Build Jieba-CPP unit tests" ON)
-# abseil's ABI is sensitive to compiler flags (notably sanitizers and the
-# debug-hardening mode), so mixing a system abseil with a sanitized build of
-# this library leads to spurious failures. Set this ON to build abseil from
-# source with matching flags (the CI sanitizer job does this).
-option(JIEBACPP_FETCH_ABSEIL "Build abseil from source instead of find_package" OFF)
+
 
 include(FetchContent)
 
 # --- Dependencies -----------------------------------------------------------
 #
-# The library needs three things:
+# The library needs two things:
 #   * zstd          — to decompress the embedded dictionary at load time
-#   * abseil         — flat_hash_set for the separator lookup on the hot path
 #   * darts-clone    — the double-array trie (header-only: a single darts.h)
 #
 # Prefer system packages; fall back to fetching pinned sources so a clean
@@ -57,22 +52,6 @@ else()
     endif()
     target_include_directories(jiebacpp_zstd INTERFACE ${ZSTD_INCLUDE_DIR})
     target_link_libraries(jiebacpp_zstd INTERFACE ${ZSTD_LIBRARY})
-endif()
-
-if(JIEBACPP_FETCH_ABSEIL)
-    set(absl_FOUND FALSE)
-else()
-    find_package(absl QUIET)
-endif()
-if(NOT absl_FOUND)
-    FetchContent_Declare(
-        abseil
-        GIT_REPOSITORY https://github.com/abseil/abseil-cpp.git
-        GIT_TAG        20240722.0
-    )
-    set(ABSL_PROPAGATE_CXX_STD ON)
-    set(ABSL_ENABLE_INSTALL OFF)
-    FetchContent_MakeAvailable(abseil)
 endif()
 
 # darts-clone is header-only; vendor just the header via FetchContent.
@@ -104,7 +83,6 @@ target_include_directories(jieba
 target_compile_options(jieba PRIVATE "--embed-dir=${CMAKE_CURRENT_SOURCE_DIR}/data")
 
 target_link_libraries(jieba
-    PUBLIC  absl::flat_hash_set
     PRIVATE jiebacpp_zstd)
 # `jieba.h` -> `jieba_dict.h` includes <darts.h>, so darts-clone is a public
 # (transitive) include dependency for consumers of the library.
