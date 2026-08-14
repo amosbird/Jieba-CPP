@@ -173,29 +173,42 @@ inline void segmentWithAsciiHandling(
 /// bytes inside keys — that encoding is the only place where bytes are reshuffled.
 inline Rune decodeUTF8Rune(const char * str, size_t len, size_t & out_len)
 {
-    uint8_t b0 = static_cast<uint8_t>(str[0]);
+    const uint8_t b0 = static_cast<uint8_t>(str[0]);
 
     if (b0 < 0x80)
     {
         out_len = 1;
         return b0;
     }
-    if ((b0 & 0xE0) == 0xC0 && len >= 2 && (static_cast<uint8_t>(str[1]) & 0xC0) == 0x80)
+    if (b0 >= 0xC2 && b0 <= 0xDF && len >= 2 && (static_cast<uint8_t>(str[1]) & 0xC0) == 0x80)
     {
         out_len = 2;
         return ((b0 & 0x1F) << 6) | (static_cast<uint8_t>(str[1]) & 0x3F);
     }
-    if ((b0 & 0xF0) == 0xE0 && len >= 3 && (static_cast<uint8_t>(str[1]) & 0xC0) == 0x80
-        && (static_cast<uint8_t>(str[2]) & 0xC0) == 0x80)
+    if (b0 >= 0xE0 && b0 <= 0xEF && len >= 3)
     {
-        out_len = 3;
-        return ((b0 & 0x0F) << 12) | ((static_cast<uint8_t>(str[1]) & 0x3F) << 6) | (static_cast<uint8_t>(str[2]) & 0x3F);
+        const uint8_t b1 = static_cast<uint8_t>(str[1]);
+        const uint8_t b2 = static_cast<uint8_t>(str[2]);
+        const bool shortest_form = b0 != 0xE0 || b1 >= 0xA0;
+        const bool not_surrogate = b0 != 0xED || b1 < 0xA0;
+        if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 && shortest_form && not_surrogate)
+        {
+            out_len = 3;
+            return ((b0 & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F);
+        }
     }
-    if ((b0 & 0xF8) == 0xF0 && len >= 4 && (static_cast<uint8_t>(str[1]) & 0xC0) == 0x80
-        && (static_cast<uint8_t>(str[2]) & 0xC0) == 0x80 && (static_cast<uint8_t>(str[3]) & 0xC0) == 0x80)
+    if (b0 >= 0xF0 && b0 <= 0xF4 && len >= 4)
     {
-        out_len = 4;
-        return 0xFFFF; // Beyond BMP — clamp to the sentinel value.
+        const uint8_t b1 = static_cast<uint8_t>(str[1]);
+        const uint8_t b2 = static_cast<uint8_t>(str[2]);
+        const uint8_t b3 = static_cast<uint8_t>(str[3]);
+        const bool shortest_form = b0 != 0xF0 || b1 >= 0x90;
+        const bool in_unicode_range = b0 != 0xF4 || b1 <= 0x8F;
+        if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 && (b3 & 0xC0) == 0x80 && shortest_form && in_unicode_range)
+        {
+            out_len = 4;
+            return 0xFFFF; // Beyond BMP — clamp to the sentinel value.
+        }
     }
 
     out_len = 1;

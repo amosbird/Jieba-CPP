@@ -81,6 +81,35 @@ int main()
         CHECK_EQ(Jieba::decodeUTF8Rune(bad, 1, len), Rune{0xFFFD});
         CHECK_EQ(len, size_t{1});
 
+        // Overlong 2-byte encodings are invalid and consume only their lead byte.
+        const char overlong_nul[] = {static_cast<char>(0xC0), static_cast<char>(0x80)};
+        CHECK_EQ(Jieba::decodeUTF8Rune(overlong_nul, sizeof(overlong_nul), len), Rune{0xFFFD});
+        CHECK_EQ(len, size_t{1});
+
+        const char overlong_q[] = {static_cast<char>(0xC1), static_cast<char>(0xB1)};
+        CHECK_EQ(Jieba::decodeUTF8Rune(overlong_q, sizeof(overlong_q), len), Rune{0xFFFD});
+        CHECK_EQ(len, size_t{1});
+
+        // Overlong 3-byte encoding and UTF-16 surrogate codepoints are invalid.
+        const char overlong_three[] = {static_cast<char>(0xE0), static_cast<char>(0x80), static_cast<char>(0x80)};
+        CHECK_EQ(Jieba::decodeUTF8Rune(overlong_three, sizeof(overlong_three), len), Rune{0xFFFD});
+        CHECK_EQ(len, size_t{1});
+
+        const char surrogate[] = {static_cast<char>(0xED), static_cast<char>(0xA0), static_cast<char>(0x80)};
+        CHECK_EQ(Jieba::decodeUTF8Rune(surrogate, sizeof(surrogate), len), Rune{0xFFFD});
+        CHECK_EQ(len, size_t{1});
+
+        // Overlong and out-of-range 4-byte encodings are invalid; valid astral input remains clamped.
+        const char overlong_four[]
+            = {static_cast<char>(0xF0), static_cast<char>(0x80), static_cast<char>(0x80), static_cast<char>(0x80)};
+        CHECK_EQ(Jieba::decodeUTF8Rune(overlong_four, sizeof(overlong_four), len), Rune{0xFFFD});
+        CHECK_EQ(len, size_t{1});
+
+        const char out_of_range[]
+            = {static_cast<char>(0xF4), static_cast<char>(0x90), static_cast<char>(0x80), static_cast<char>(0x80)};
+        CHECK_EQ(Jieba::decodeUTF8Rune(out_of_range, sizeof(out_of_range), len), Rune{0xFFFD});
+        CHECK_EQ(len, size_t{1});
+
         // Truncated 3-byte sequence (lead says 3 bytes, only 1 available) -> replacement
         const char trunc[] = {static_cast<char>(0xE5), 0};
         CHECK_EQ(Jieba::decodeUTF8Rune(trunc, 1, len), Rune{0xFFFD});
@@ -118,6 +147,21 @@ int main()
         }
         CHECK(found_bei);
         CHECK(found_daxue);
+
+        // Overlong encodings stay as malformed byte spans; they must not disappear as NUL
+        // separators or mutate into ASCII letters and merge with neighbouring tokens.
+        std::string overlong = "a";
+        overlong.append("\xC0\x80", 2);
+        overlong += "b";
+        overlong.append("\xC1\xB1", 2);
+        overlong += "c";
+        auto t3 = jieba.cut(overlong);
+        CHECK_EQ(t3.size(), size_t{5});
+        CHECK_EQ(t3[0], std::string_view("a"));
+        CHECK_EQ(t3[1], std::string_view(overlong.data() + 1, 2));
+        CHECK_EQ(t3[2], std::string_view("b"));
+        CHECK_EQ(t3[3], std::string_view(overlong.data() + 4, 2));
+        CHECK_EQ(t3[4], std::string_view("c"));
     }
 
     TEST_MAIN_RETURN();
