@@ -69,7 +69,7 @@ def main():
     for mode in ("exact", "search"):
         for name in RUNNERS:
             values = sorted(float(row["mib_per_sec"]) for row in raw if row["implementation"] == name and row["mode"] == mode)
-            p95 = values[max(0, int(len(values) * 0.95) - 1)]
+            p95 = values[min(len(values) - 1, int((len(values) - 1) * 0.95 + 0.5))]
             print(f"{name},{mode},{statistics.median(values):.2f},{p95:.2f},{min(values):.2f}")
 
 
