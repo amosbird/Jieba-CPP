@@ -4,40 +4,83 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CC: clang-19
+  CXX: clang++-19
 
 jobs:
-  build-and-test:
-    runs-on: ubuntu-24.04
+  test:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: release
-            cmake_flags: "-DCMAKE_BUILD_TYPE=Release"
-          - name: asan
-            cmake_flags: "-DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
-    name: ${{ matrix.name }}
+        build_type: [Release, Debug]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install toolchain and deps
+      - name: Install toolchain and dependencies
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
           echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main" | sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
-          sudo apt-get install -y clang-19 cmake ninja-build libzstd-dev
-          # Python deps for the reproducibility test (optional; test skips if missing).
-          python3 -m pip install --user numpy zstandard dartsclone || true
-
+          sudo apt-get install -y clang-19 ninja-build libzstd-dev python3-pip
+          python3 -m pip install --break-system-packages numpy zstandard dartsclone
       - name: Configure
-        run: >
-          cmake -B build -G Ninja
-          -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19
-          ${{ matrix.cmake_flags }}
-
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
       - name: Build
-        run: cmake --build build -j
-
+        run: cmake --build build -j 2
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain and dependencies
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y clang-19 ninja-build libzstd-dev python3-pip
+          python3 -m pip install --break-system-packages numpy zstandard dartsclone
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer'
+          -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined'
+      - name: Build
+        run: cmake --build build -j 2
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: ctest --test-dir build --output-on-failure
+
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        shared: [OFF, ON]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain and dependencies
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y clang-19 ninja-build libzstd-dev
+      - name: Build and install
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=${{ matrix.shared }} -DJIEBACPP_BUILD_TESTS=OFF -DCMAKE_INSTALL_PREFIX="$PWD/install"
+          cmake --build build -j 2
+          cmake --install build
+      - name: Test installed package
+        run: |
+          cmake -S tests/package_consumer -B consumer-build -G Ninja -DCMAKE_PREFIX_PATH="$PWD/install"
+          cmake --build consumer-build -j 2
+          ./consumer-build/jiebacpp_consumer

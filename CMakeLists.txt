@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 3.16)
-project(JiebaCPP CXX)
+cmake_minimum_required(VERSION 3.20)
+project(JiebaCPP VERSION 1.0.0 LANGUAGES CXX)
 
 # Jieba-CPP — a compact C++ reimplementation of the jieba Chinese word
 # segmentation algorithm, with an embedded dictionary and HMM model.
@@ -23,6 +23,8 @@ option(JIEBACPP_STANDALONE_FUZZERS "Build fuzz targets with a corpus-replay main
 
 
 include(FetchContent)
+include(CMakePackageConfigHelpers)
+include(GNUInstallDirs)
 
 # --- Dependencies -----------------------------------------------------------
 #
@@ -39,6 +41,7 @@ include(FetchContent)
 # config first, otherwise fall back to plain library discovery, and normalize
 # everything to a single `JiebaCPP::zstd` target the library links against.
 add_library(jiebacpp_zstd INTERFACE)
+add_library(JiebaCPP::zstd ALIAS jiebacpp_zstd)
 find_package(zstd QUIET)
 if(TARGET zstd::libzstd)
     target_link_libraries(jiebacpp_zstd INTERFACE zstd::libzstd)
@@ -72,13 +75,21 @@ add_library(jieba
     src/jieba_mp_seg.cpp
     src/jieba_hmm_seg.cpp)
 
+if(BUILD_SHARED_LIBS)
+    set(JIEBACPP_STATIC_BUILD OFF)
+else()
+    set(JIEBACPP_STATIC_BUILD ON)
+endif()
+
 target_compile_features(jieba PUBLIC cxx_std_23)
 
 # Public headers in include/; the embedded data (dict_le.dat.zst via #embed and
 # jieba_hmm_model.dat via #include) lives in data/ and is resolved as a quoted
 # include from the sources.
 target_include_directories(jieba
-    PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/JiebaCPP>
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/data)
 
 # `#embed` needs its search directory passed explicitly on current compilers.
@@ -88,9 +99,46 @@ target_link_libraries(jieba
     PRIVATE jiebacpp_zstd)
 # `jieba.h` -> `jieba_dict.h` includes <darts.h>, so darts-clone is a public
 # (transitive) include dependency for consumers of the library.
-target_include_directories(jieba SYSTEM PUBLIC ${darts_clone_SOURCE_DIR}/include)
+target_include_directories(jieba SYSTEM PUBLIC
+    $<BUILD_INTERFACE:${darts_clone_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/JiebaCPP>)
+
+set_target_properties(jieba PROPERTIES
+    EXPORT_NAME jieba
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR}
+    WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 add_library(JiebaCPP::jieba ALIAS jieba)
+
+# --- Installation ------------------------------------------------------------
+
+configure_package_config_file(
+    cmake/JiebaCPPConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/JiebaCPPConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/JiebaCPP)
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/JiebaCPPConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion)
+
+install(TARGETS jieba jiebacpp_zstd
+    EXPORT JiebaCPPTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/JiebaCPP)
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/JiebaCPP)
+install(FILES ${darts_clone_SOURCE_DIR}/include/darts.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/JiebaCPP)
+install(FILES LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/JiebaCPP)
+install(EXPORT JiebaCPPTargets
+    FILE JiebaCPPTargets.cmake
+    NAMESPACE JiebaCPP::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/JiebaCPP)
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/JiebaCPPConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/JiebaCPPConfigVersion.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/JiebaCPP)
 
 # --- Tests ------------------------------------------------------------------
 

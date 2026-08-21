@@ -1,5 +1,9 @@
 # Jieba-CPP
 
+[![CI](https://github.com/amosbird/Jieba-CPP/actions/workflows/ci.yml/badge.svg)](https://github.com/amosbird/Jieba-CPP/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/amosbird/Jieba-CPP)](https://github.com/amosbird/Jieba-CPP/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A compact C++ implementation of Jieba Chinese word segmentation with an embedded
 dictionary and HMM model. Tokenization requires no runtime data files.
 
@@ -104,9 +108,13 @@ ctest --test-dir build --output-on-failure
 CMake integration:
 
 ```cmake
-add_subdirectory(Jieba-CPP)
+find_package(JiebaCPP 1.0 REQUIRED)
 target_link_libraries(your_target PRIVATE JiebaCPP::jieba)
 ```
+
+For an installed package, set `CMAKE_PREFIX_PATH` if Jieba-CPP is not installed
+in a standard system prefix. It requires zstd at runtime; `darts.h` is included
+in the development package.
 
 ## Testing
 

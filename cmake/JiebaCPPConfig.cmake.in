@@ -1,0 +1,33 @@
+@PACKAGE_INIT@
+
+set(JiebaCPP_STATIC_BUILD @JIEBACPP_STATIC_BUILD@)
+
+if(JiebaCPP_STATIC_BUILD)
+    find_package(zstd CONFIG QUIET)
+
+    if(NOT TARGET JiebaCPP::zstd)
+        add_library(JiebaCPP::zstd INTERFACE IMPORTED)
+    endif()
+
+    if(TARGET zstd::libzstd)
+        set_property(TARGET JiebaCPP::zstd PROPERTY INTERFACE_LINK_LIBRARIES zstd::libzstd)
+    elseif(TARGET zstd::libzstd_shared)
+        set_property(TARGET JiebaCPP::zstd PROPERTY INTERFACE_LINK_LIBRARIES zstd::libzstd_shared)
+    elseif(TARGET zstd::libzstd_static)
+        set_property(TARGET JiebaCPP::zstd PROPERTY INTERFACE_LINK_LIBRARIES zstd::libzstd_static)
+    else()
+        find_library(JiebaCPP_ZSTD_LIBRARY NAMES zstd REQUIRED)
+        find_path(JiebaCPP_ZSTD_INCLUDE_DIR NAMES zstd.h REQUIRED)
+        set_target_properties(JiebaCPP::zstd PROPERTIES
+            INTERFACE_LINK_LIBRARIES "${JiebaCPP_ZSTD_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${JiebaCPP_ZSTD_INCLUDE_DIR}")
+    endif()
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/JiebaCPPTargets.cmake")
+if(JiebaCPP_STATIC_BUILD)
+    set_property(TARGET JiebaCPP::jiebacpp_zstd PROPERTY INTERFACE_LINK_LIBRARIES JiebaCPP::zstd)
+else()
+    set_property(TARGET JiebaCPP::jiebacpp_zstd PROPERTY INTERFACE_LINK_LIBRARIES "")
+endif()
+check_required_components(JiebaCPP)
