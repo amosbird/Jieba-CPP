@@ -8,3 +8,7 @@ cmake-build-*/
 !data/jieba_hmm_model.dat
 __pycache__/
 *.pyc
+
+benchmark/build/
+benchmark/results/*.csv
+benchmark/third_party/

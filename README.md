@@ -1,136 +1,149 @@
 # Jieba-CPP
 
-A compact C++ reimplementation of the [jieba](https://github.com/fxsjy/jieba)
-Chinese word segmentation algorithm, with an embedded dictionary and HMM model
-and no runtime data dependencies.
+A compact C++ implementation of Jieba Chinese word segmentation with an embedded
+dictionary and HMM model. Tokenization requires no runtime data files.
 
-It is the backend for the `chinese` tokenizer in
-[ClickHouse](https://github.com/ClickHouse/ClickHouse) and is maintained as a
-standalone library so it can be developed, tested and reused independently.
+Jieba-CPP is used by ClickHouse's `chinese` text-index tokenizer.
 
-## What it is (and isn't)
+## Features
 
-- The **algorithm** is a from-scratch C++ reimplementation following the design
-  of `fxsjy/jieba` (dictionary-based maximum-probability segmentation with an
-  HMM fallback for out-of-vocabulary runs). It is *not* a fork of `cppjieba`.
-- The embedded **dictionary** (`data/dict_le.dat.zst`) and **HMM model**
-  (`data/jieba_hmm_model.dat`) are generated from the `dict/jieba.dict.utf8`
-  and `dict/hmm_model.utf8` files of a pinned
-  [`cppjieba`](https://github.com/yanyiwu/cppjieba) commit. `cppjieba` is MIT
-  licensed; see [`LICENSE`](LICENSE).
+- Exact segmentation with dictionary dynamic programming and HMM fallback
+- Full segmentation with overlapping dictionary candidates
+- Search segmentation with shorter subwords
+- Embedded, reproducible dictionary and HMM model
+- Borrowed `std::string_view` results; token text is not copied
+- Thread-safe concurrent tokenization after construction
+- Little- and big-endian dictionary images
 
-## API
+## Usage
 
 ```cpp
 #include <jieba.h>
 
 Jieba::Jieba jieba;
 
-// coarse_grained: one segmentation into non-overlapping words (default).
-jieba.cut("我来自北京邮电大学");      // -> ["我", "来自", "北京邮电大学"]
+auto exact = jieba.cut("我来自北京邮电大学");
+// ["我", "来自", "北京邮电大学"]
 
-// fine_grained: additionally enumerates overlapping dictionary sub-words.
-jieba.cutAll("北京邮电大学");         // -> [..., "北京", "邮电", "大学", "北京邮电大学", ...]
-
-// search-engine mode: like cut, but splits long words into shorter sub-words.
-jieba.cutForSearch("中华人民共和国");
+auto full = jieba.cutAll("北京邮电大学");
+auto search = jieba.cutForSearch("中华人民共和国");
 ```
 
-All three return `std::vector<std::string_view>` whose elements point into the
-input buffer (no copies). ASCII handling is shared across granularities:
-alphanumeric runs are kept whole (`5G`, `iPhone6s`), ASCII punctuation is
-dropped, and the library does no word-splitting of Latin text — it is intended
-for Chinese.
+The returned views refer to the input buffer, which must remain alive while the
+results are used.
 
-## Why the data is pinned
+ASCII letters and digits are kept in contiguous runs such as `5G` and
+`iPhone6s`. ASCII punctuation and Unicode punctuation/separators are not emitted
+as tokens.
 
-`tools/generate_dict.py` and `tools/generate_hmm_model.py` download their source
-data from a hard-coded `cppjieba` commit and verify it against a hard-coded
-SHA-256 before processing. The commit is pinned on purpose:
+## Implementation
 
-- **Reproducibility** — regenerating the embedded files always produces the
-  exact bytes committed here, regardless of when the script runs. A moving ref
-  would drift.
-- **Stability of tokenization** — changing the dictionary or model changes how
-  text is segmented. A consumer that builds an index over segmented tokens would
-  silently get different results after an upgrade. So the data is versioned with
-  the library, not tracked against upstream `master`.
+Input is decoded into 16-bit BMP code points and byte offsets. Dictionary prefixes
+are resolved with a `darts-clone` double-array trie. Exact segmentation uses a flat
+DAG and reverse dynamic programming; unknown single-character runs use a four-state
+HMM.
 
-If the embedded data is ever intentionally upgraded, downstream users that need
-stable behavior (e.g. an existing text index) should pin to a tagged release.
+DAG edges store dictionary weight indexes instead of `double` values. DAG topology
+and DP routes use separate contiguous arrays, avoiding per-node allocations. Prefix
+matches are bounded by the maximum supported word length of 32 code points.
 
-Current pin: `cppjieba@eed6bfe483105d1db4bfbebaf796f60c173d6e84`.
+## Performance
+
+Measurements were taken on one x86-64 host using the `jieba-rs` copy of
+*Fortress Besieged*, filtered to Han characters. Each runner processed the same
+626,589-byte corpus on one pinned CPU, with `-O3 -DNDEBUG -march=native`, 5 warmup
+iterations, 10 randomized rounds, and 100 measured iterations per round. Every
+token was consumed by the same checksum.
+
+### Exact segmentation
+
+| Implementation | Version | Median MiB/s | Output equal to cppjieba |
+|---|---|---:|---:|
+| **Jieba-CPP** | this revision | **29.1** | 241/241 documents |
+| jieba-rs | `d653b210` | 18.2 | 135/241 documents |
+| cppjieba DATrie | `a0db4099` | 11.4 | 241/241 documents |
+| cppjieba | `8f171de5` | 8.9 | 241/241 documents |
+| Nexaloid | `8194df8d` | 5.4 | 3/241 documents |
+
+Only Jieba-CPP, cppjieba, and the DATrie fork produced identical token streams
+on every Han-only document. Throughput comparisons with other rows do not imply
+identical segmentation semantics.
+
+### Initialization and peak RSS
+
+| Implementation | Initialization | Peak RSS |
+|---|---:|---:|
+| **Jieba-CPP** | **0.02 s** | 16.9 MiB |
+| cppjieba DATrie | 0.02 s | **9.1 MiB** |
+| jieba-rs | 0.15 s | 45.0 MiB |
+| cppjieba | 0.66 s | 124.4 MiB |
+| Nexaloid | 0.23 s | 270.7 MiB |
+
+The DATrie fork loads an external cache with file-backed `mmap`; Jieba-CPP embeds
+a compressed dictionary and decompresses it into private memory. Peak RSS therefore
+reflects deployment and loading strategy as well as data-structure size.
+
+Results are specific to this machine, corpus, compiler, and exact-mode harness.
+Reproduction scripts, pinned revisions, correctness checks, and corpus preparation
+are in [`benchmark/`](benchmark/README.md).
 
 ## Building
 
 Requirements:
 
-- A C++23 compiler with `#embed` support (Clang ≥ 19 or GCC ≥ 15).
-- [abseil](https://github.com/abseil/abseil-cpp) (`flat_hash_set`), `libzstd`.
-  Both are found via `find_package`; abseil is fetched automatically if missing.
-- [darts-clone](https://github.com/s-yata/darts-clone) — header only, fetched
-  automatically.
+- C++23 compiler with `#embed` support (GCC 15+ or Clang 19+)
+- zstd
+- `darts-clone` (fetched automatically by the standalone build)
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Link against the library with CMake:
+CMake integration:
 
 ```cmake
 add_subdirectory(Jieba-CPP)
 target_link_libraries(your_target PRIVATE JiebaCPP::jieba)
 ```
 
-### Use inside ClickHouse
+## Testing
 
-ClickHouse vendors this library as a submodule and builds it with its own
-`-cmake` wrapper (using its in-tree abseil/zstd/darts-clone targets), so the
-sources and headers here are kept byte-identical to that copy. The standalone
-`CMakeLists.txt` in this repo is for independent development and CI.
+The tests cover segmentation, BMP trie-key encoding, malformed UTF-8, flat-DAG
+layout, exhaustive small-DAG dynamic programming, randomized DAGs, concurrency,
+endianness, and generated-data reproducibility.
 
-## Regenerating the embedded data
+Optional libFuzzer targets exercise arbitrary UTF-8 input and structured DAGs:
+
+```bash
+cmake -S . -B build-fuzz -G Ninja \
+  -DCMAKE_CXX_COMPILER=clang++ \
+  -DJIEBACPP_BUILD_TESTS=OFF \
+  -DJIEBACPP_BUILD_FUZZERS=ON
+cmake --build build-fuzz -j
+./build-fuzz/fuzz_segmentation -max_total_time=60
+./build-fuzz/fuzz_dag -max_total_time=60
+```
+
+## Embedded data
+
+The dictionary and HMM source files are pinned to
+`cppjieba@eed6bfe483105d1db4bfbebaf796f60c173d6e84`. Generator scripts verify
+source SHA-256 hashes and produce deterministic output:
 
 ```bash
 pip install numpy zstandard dartsclone
-python3 tools/generate_dict.py        # writes data/dict_le.dat.zst + data/dict_be.dat.zst
-python3 tools/generate_hmm_model.py   # writes data/jieba_hmm_model.dat
+python3 tools/generate_dict.py
+python3 tools/generate_hmm_model.py
 ```
 
-Both scripts are deterministic; re-running them reproduces the committed files
-byte-for-byte (the `test_reproducible` test asserts this when run with network
-access).
-
-## On-disk format
-
-The dictionary is an image of a [darts-clone](https://github.com/s-yata/darts-clone)
-double-array trie plus a parallel array of `double` weights, zstd-compressed.
-Trie keys encode each BMP code point as 3 bytes (`0x80..0xFF` only, so no `0x00`
-bytes, injective and lexicographically order-preserving). The HMM model is a
-generated C++ source `#include`d directly (endianness-independent).
-
-Two mirror dictionary files are shipped, `data/dict_le.dat.zst` (little-endian)
-and `data/dict_be.dat.zst` (big-endian); they hold identical element values in
-opposite byte order. The library `#embed`s whichever matches the host's
-`__BYTE_ORDER__`, so the trie/weights are loaded natively on both little- and
-big-endian platforms with no byte-swapping at load time. The `test_endianness`
-test asserts the two files are exact element-wise byte-swap mirrors, which lets
-the big-endian build be validated on a little-endian host.
-
-## Layout
-
-```
-include/   public headers (jieba.h, jieba_common.h, jieba_dict.h)
-src/       library sources
-data/      embedded dictionary + HMM model
-tools/     generators for the embedded data
-tests/     unit tests (segmentation, encoding invariants, reproducibility)
-```
+The dictionary contains a `darts-clone` trie and a parallel array of logarithmic
+weights, compressed with zstd. Trie keys encode each BMP code point into three
+nonzero, order-preserving bytes. Separate little- and big-endian images allow
+native loading without runtime byte swapping.
 
 ## License
 
-The library code, the embedded dictionary, and the embedded HMM model derive
-from `cppjieba`, which is distributed under the MIT License. See
-[`LICENSE`](LICENSE).
+The implementation, dictionary, and HMM model are distributed under the MIT
+License. See [`LICENSE`](LICENSE).

@@ -42,8 +42,12 @@ struct MixSegment
             while (j < words.size() && words[j].begin == words[j].end)
                 ++j;
 
-            /// Use HMM segmentation on the single-character sequence
-            HMMSegment::cut(dict, runes, words[i].begin, words[j - 1].end + 1, ranges);
+            /// Use HMM segmentation on the single-character sequence. A lone non-ASCII
+            /// rune is already the only possible HMM result, so avoid allocating Viterbi buffers.
+            if (j == i + 1 && runes.runeAt(words[i].begin) >= 0x80)
+                ranges.push_back(words[i]);
+            else
+                HMMSegment::cut(dict, runes, words[i].begin, words[j - 1].end + 1, ranges);
 
             /// Move to the next segment after the single-character block
             i = j;
@@ -106,15 +110,17 @@ struct FullSegment
             size_t max_word_end_pos = 0;
             for (size_t i = 0; i < dag.size(); i++)
             {
-                for (const auto & kv : dag[i].nexts)
+                const auto node_edges = dag.edgesAt(i);
+                for (const auto & edge : node_edges)
                 {
-                    size_t len = kv.first - i;
-                    bool is_single_char_fallback = dag[i].nexts.size() == 1 && max_word_end_pos <= i;
-                    bool is_valid_multi_char_word = kv.second != 0 && len >= 2;
+                    size_t next = i + edge.length;
+                    size_t len = edge.length;
+                    bool is_single_char_fallback = node_edges.size() == 1 && max_word_end_pos <= i;
+                    bool is_valid_multi_char_word = edge.weight_index != FALLBACK_WEIGHT_INDEX && len >= 2;
                     if (is_single_char_fallback || is_valid_multi_char_word)
-                        ranges.push_back({sub_begin + i, sub_begin + kv.first - 1});
+                        ranges.push_back({sub_begin + i, sub_begin + next - 1});
 
-                    max_word_end_pos = std::max(max_word_end_pos, kv.first);
+                    max_word_end_pos = std::max(max_word_end_pos, next);
                 }
             }
         };
@@ -126,16 +132,19 @@ struct FullSegment
 namespace
 {
 
+std::string_view rangeToWord(std::string_view sentence, const Runes & runes, RuneRange range)
+{
+    size_t byte_start = runes.infoAt(range.begin).offset;
+    size_t byte_end = runes.infoAt(range.end).offset + runes.infoAt(range.end).len;
+    return sentence.substr(byte_start, byte_end - byte_start);
+}
+
 std::vector<std::string_view> convertRangesToWords(std::string_view sentence, const Runes & runes, const RuneRanges & ranges)
 {
     std::vector<std::string_view> words;
     words.reserve(ranges.size());
-    for (const auto & [start, end] : ranges)
-    {
-        size_t byte_start = runes.infoAt(start).offset;
-        size_t byte_end = runes.infoAt(end).offset + runes.infoAt(end).len;
-        words.push_back(sentence.substr(byte_start, byte_end - byte_start));
-    }
+    for (const auto range : ranges)
+        words.push_back(rangeToWord(sentence, runes, range));
     return words;
 }
 
@@ -195,6 +204,7 @@ std::vector<std::string_view> Jieba::cutImpl(std::string_view sentence)
 
     PreFilter filter(runes);
     RuneRanges all_ranges;
+    all_ranges.reserve(runes.size());
 
     while (filter.hasNext())
     {

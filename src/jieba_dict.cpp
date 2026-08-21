@@ -65,15 +65,13 @@ DAG DartsDict::buildDAG(std::span<const Rune> runes) const
 
     for (size_t i = 0; i < size; ++i)
     {
-        static constexpr size_t MAX_RESULTS = 128;
-        static constexpr size_t MAX_WORD_LENGTH = 32;
-
-        ::Darts::DoubleArray::result_pair_type results[MAX_RESULTS] = {};
+        ::Darts::DoubleArray::result_pair_type results[MAX_WORD_LENGTH];
         size_t max_bytes = std::min(MAX_WORD_LENGTH, size - i) * BYTES_PER_RUNE;
         size_t num = da.commonPrefixSearch(
-            encoded.data() + i * BYTES_PER_RUNE, results, MAX_RESULTS, max_bytes);
+            encoded.data() + i * BYTES_PER_RUNE, results, MAX_WORD_LENGTH, max_bytes);
 
-        dag[i].nexts.emplace_back(i + 1, min_weight); /// Single rune is always a word
+        dag.startNode(i);
+        dag.addEdge(1, FALLBACK_WEIGHT_INDEX); /// Single rune is always a word
         for (size_t j = 0; j < num; ++j)
         {
             auto & match = results[j];
@@ -81,10 +79,11 @@ DAG DartsDict::buildDAG(std::span<const Rune> runes) const
                 continue;
 
             size_t char_num = match.length / BYTES_PER_RUNE;
+            const uint32_t weight_index = static_cast<uint32_t>(match.value);
             if (char_num == 1)
-                dag[i].nexts[0].second = elems[match.value];
+                dag.setFirstEdgeWeight(i, weight_index);
             else
-                dag[i].nexts.emplace_back(i + char_num, elems[match.value]);
+                dag.addEdge(static_cast<uint8_t>(char_num), weight_index);
         }
     }
     return dag;

@@ -12,6 +12,9 @@ endfunction()
 
 jiebacpp_add_test(test_segmentation)
 jiebacpp_add_test(test_encoding)
+jiebacpp_add_test(test_dag)
+jiebacpp_add_test(test_dp)
+jiebacpp_add_test(test_concurrent)
 
 # Endianness mirror check: validates that dict_be.dat.zst is the exact element-wise
 # byte-swap of dict_le.dat.zst. Needs zstd and the data directory; runs on any host.

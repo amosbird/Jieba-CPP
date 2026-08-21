@@ -3,33 +3,6 @@
 namespace Jieba
 {
 
-namespace
-{
-
-void calcDP(DAG & dag)
-{
-    size_t size = dag.size();
-    for (size_t i = size; i-- > 0;)
-    {
-        for (const auto & it : dag[i].nexts)
-        {
-            int next = it.first;
-            double val = it.second;
-
-            if (next < size)
-                val += dag[next].max_weight;
-
-            if (next <= size && val > dag[i].max_weight)
-            {
-                dag[i].max_weight = val;
-                dag[i].max_next = next;
-            }
-        }
-    }
-}
-
-}
-
 struct MPSegment
 {
     static void cut(const DartsDict & dict, const Runes & runes, size_t begin, size_t end, RuneRanges & ranges);
@@ -43,10 +16,10 @@ void MPSegment::cut(const DartsDict & dict, const Runes & runes_data, size_t beg
     const auto & runes = runes_data.getRunes();
     std::span<const Rune> span(&runes[begin], end - begin);
     auto dag = dict.buildDAG(span);
-    calcDP(dag);
+    auto route = dag.calculateBestPath([&](uint32_t weight_index) { return dict.weightAt(weight_index); });
     for (size_t i = 0; i < dag.size();)
     {
-        int next = dag[i].max_next;
+        size_t next = i + route.lengths[i];
         ranges.push_back({begin + i, begin + next - 1});
         i = next;
     }

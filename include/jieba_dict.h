@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <vector>
 #include <darts.h>
@@ -9,14 +10,79 @@
 namespace Jieba
 {
 
-struct DAGNode
+constexpr uint32_t FALLBACK_WEIGHT_INDEX = std::numeric_limits<uint32_t>::max();
+
+struct DAGEdge
 {
-    std::vector<std::pair<size_t, double>> nexts;
-    double max_weight = -3.14e+100;
-    int max_next = -1;
+    using length_type = uint8_t;
+
+    uint32_t weight_index = 0;
+    length_type length = 0;
 };
 
-using DAG = std::vector<DAGNode>;
+struct DAGRoute
+{
+    explicit DAGRoute(size_t size)
+        : weights(size, -3.14e+100)
+        , lengths(size)
+    {
+    }
+
+    std::vector<double> weights;
+    std::vector<uint8_t> lengths;
+};
+
+class DAG
+{
+public:
+    explicit DAG(size_t size)
+        : edge_starts(size)
+    {
+        /// shortcut: Chinese dictionary text averages close to two edges per position;
+        /// fall back to one edge per position if doubling would exceed the container limit.
+        edges.reserve(size <= edges.max_size() / 2 ? size * 2 : size);
+    }
+
+    size_t size() const { return edge_starts.size(); }
+    size_t edgeCount() const { return edges.size(); }
+
+    void startNode(size_t index) { edge_starts[index] = edges.size(); }
+    void addEdge(uint8_t length, uint32_t weight_index) { edges.push_back({weight_index, length}); }
+    void setFirstEdgeWeight(size_t index, uint32_t weight_index) { edges[edge_starts[index]].weight_index = weight_index; }
+
+    std::span<const DAGEdge> edgesAt(size_t index) const
+    {
+        const size_t edge_begin = edge_starts[index];
+        const size_t edge_end = index + 1 < edge_starts.size() ? edge_starts[index + 1] : edges.size();
+        return std::span(edges).subspan(edge_begin, edge_end - edge_begin);
+    }
+
+    template <typename WeightAt>
+    DAGRoute calculateBestPath(WeightAt && weight_at) const
+    {
+        DAGRoute route(size());
+        for (size_t i = size(); i-- > 0;)
+        {
+            for (const auto & edge : edgesAt(i))
+            {
+                const size_t next = i + edge.length;
+                double weight = weight_at(edge.weight_index);
+                if (next < size())
+                    weight += route.weights[next];
+                if (weight > route.weights[i])
+                {
+                    route.weights[i] = weight;
+                    route.lengths[i] = edge.length;
+                }
+            }
+        }
+        return route;
+    }
+
+private:
+    std::vector<size_t> edge_starts;
+    std::vector<DAGEdge> edges;
+};
 
 /// On-disk header layout. Sizes match the format produced by `generate_dict.py`
 /// (8 bytes each), so we use fixed-width types here regardless of the platform's `size_t`.
@@ -49,6 +115,8 @@ struct DartsHeader
 /// keys. Runtime callers use `encodeRuneKey` to materialise the lookup key
 /// before calling `Darts::DoubleArray::exactMatchSearch` / `commonPrefixSearch`.
 constexpr size_t BYTES_PER_RUNE = 3;
+constexpr size_t MAX_WORD_LENGTH = 32;
+static_assert(MAX_WORD_LENGTH <= std::numeric_limits<DAGEdge::length_type>::max());
 
 /// See the comment on `BYTES_PER_RUNE` for the encoding scheme.
 inline void encodeRuneIntoBuffer(Rune rune, char * out)
@@ -84,6 +152,7 @@ public:
 
     double find(std::span<const Rune> key) const;
     DAG buildDAG(std::span<const Rune> runes) const;
+    double weightAt(uint32_t index) const { return index == FALLBACK_WEIGHT_INDEX ? min_weight : elems[index]; }
 
 private:
     /// Decompressed dictionary buffer. Held as uint64_t so that the underlying
