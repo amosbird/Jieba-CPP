@@ -1,5 +1,6 @@
 #include <jieba_common.h>
 
+#include <array>
 #include <span>
 
 namespace Jieba
